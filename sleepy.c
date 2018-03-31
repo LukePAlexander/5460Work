@@ -27,7 +27,11 @@
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/mutex.h>
-
+#include <linux/delay.h>
+#include <linux/jiffies.h>
+#include <linux/timer.h>
+#include <linux/wait.h>
+#include <linux/sched.h>
 #include <asm/uaccess.h>
 
 #include "sleepy.h"
@@ -89,13 +93,18 @@ sleepy_read(struct file *filp, char __user *buf, size_t count,
 {
   struct sleepy_dev *dev = (struct sleepy_dev *)filp->private_data;
   ssize_t retval = 0;
+  int minor;
+
+
 	
   if (mutex_lock_killable(&dev->sleepy_mutex))
     return -EINTR;
-	
-  /* YOUR CODE HERE */
 
-  /* END YOUR CODE */
+  minor = (int)iminor(filp->f_path.dentry->d_inode);
+  printk("SLEEPY_READ DEVICE (%d): Process is waking everyone up. \n", minor);
+  dev->reading = 1;
+
+  wake_up_interruptible(&dev->my_queue);
 	
   mutex_unlock(&dev->sleepy_mutex);
   return retval;
@@ -105,13 +114,62 @@ ssize_t
 sleepy_write(struct file *filp, const char __user *buf, size_t count, 
 	     loff_t *f_pos)
 {
+  unsigned int toWait; 
+  unsigned long timeout;
+  int result;
   struct sleepy_dev *dev = (struct sleepy_dev *)filp->private_data;
   ssize_t retval = 0;
-	
+  int minor;
+  ssize_t remaining_seconds;
+  unsigned long check = 0;
+  
   if (mutex_lock_killable(&dev->sleepy_mutex))
     return -EINTR;
 	
   /* YOUR CODE HERE */
+
+  if(count != 4){
+    mutex_unlock(&dev->sleepy_mutex);
+    printk("Count != 4, count is: %d", count);
+    return -EINVAL;
+  }
+  //Copy from user returns 0 if copied successfully.
+  
+  check = copy_from_user(&toWait,buf,4);
+  if(0 != check){
+    printk("Copy unsuccesful, check is: %d\n", check);
+    printk("The toWait is: %d\n", toWait);
+    mutex_unlock(&dev->sleepy_mutex);
+    return -EINVAL;
+  }
+  if(toWait <= 0){
+    toWait = 0;
+  }
+  timeout = usecs_to_jiffies(toWait);
+  printk("Got to the write unlock");
+  
+  mutex_unlock(&dev->sleepy_mutex);
+
+  result = 0;
+  result = wait_event_timeout(dev->my_queue, dev->reading == 1, timeout);
+
+  if (mutex_lock_killable(&dev->sleepy_mutex))
+    return -EINTR;
+  
+  printk("Achieved the write lock a second time");
+  minor = (int)iminor(filp->f_path.dentry->d_inode);
+
+  remaining_seconds = jiffies_to_usecs(*result);
+  printk("SLEEPY_WRITE DEVICE (%d): remaining = %zd \n", minor, remaining_seconds);
+  //result = 0 means it timed out properly no read.
+  if(result != 0){
+    printk("Returned early or during read, remaining: %d", result);
+    retval = result;
+    mutex_unlock(&dev->sleepy_mutex);
+    return retval;
+  }
+
+  printk("Returned on timeout");
 
   /* END YOUR CODE */
 	
@@ -152,6 +210,8 @@ sleepy_construct_device(struct sleepy_dev *dev, int minor,
   /* Memory is to be allocated when the device is opened the first time */
   dev->data = NULL;     
   mutex_init(&dev->sleepy_mutex);
+  init_waitqueue_head(&dev->my_queue);
+  dev->reading = 0;
     
   cdev_init(&dev->cdev, &sleepy_fops);
   dev->cdev.owner = THIS_MODULE;
