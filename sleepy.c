@@ -103,7 +103,6 @@ sleepy_read(struct file *filp, char __user *buf, size_t count,
   minor = (int)iminor(filp->f_path.dentry->d_inode);
   printk("SLEEPY_READ DEVICE (%d): Process is waking everyone up. \n", minor);
   dev->reading = 1;
-
   wake_up_interruptible(&dev->my_queue);
 	
   mutex_unlock(&dev->sleepy_mutex);
@@ -130,7 +129,7 @@ sleepy_write(struct file *filp, const char __user *buf, size_t count,
 
   if(count != 4){
     mutex_unlock(&dev->sleepy_mutex);
-    printk("Count != 4, count is: %d", count);
+    printk("Count != 4, count is: %d\n", count);
     return -EINVAL;
   }
   //Copy from user returns 0 if copied successfully.
@@ -145,8 +144,8 @@ sleepy_write(struct file *filp, const char __user *buf, size_t count,
   if(toWait <= 0){
     toWait = 0;
   }
-  timeout = usecs_to_jiffies(toWait);
-  printk("Got to the write unlock");
+  timeout = toWait*HZ;
+  printk("Timeout is: %d and toWait is: %d\n", timeout, toWait);
   
   mutex_unlock(&dev->sleepy_mutex);
 
@@ -156,20 +155,25 @@ sleepy_write(struct file *filp, const char __user *buf, size_t count,
   if (mutex_lock_killable(&dev->sleepy_mutex))
     return -EINTR;
   
-  printk("Achieved the write lock a second time");
+  //printk("Achieved the write lock a second time\n");
   minor = (int)iminor(filp->f_path.dentry->d_inode);
 
-  remaining_seconds = jiffies_to_usecs(*result);
+  if(result == 1 ){
+    remaining_seconds = result;
+  } else {
+    remaining_seconds = jiffies_to_usecs(result);
+  }
+  // printk("Result is: %d\n", result);
   printk("SLEEPY_WRITE DEVICE (%d): remaining = %zd \n", minor, remaining_seconds);
   //result = 0 means it timed out properly no read.
   if(result != 0){
-    printk("Returned early or during read, remaining: %d", result);
+    //printk("Returned early or during read, remaining: %d\n", result);
     retval = result;
     mutex_unlock(&dev->sleepy_mutex);
     return retval;
   }
 
-  printk("Returned on timeout");
+  //printk("Returned on timeout\n");
 
   /* END YOUR CODE */
 	
